@@ -1,0 +1,111 @@
+#!/bin/bash
+
+entrypoint=$ENTRYPOINT
+project=${PROJECT:-paper}
+version=$VERSION
+build=$BUILD
+sumbin=${SUMBIN:-sha256sum}
+
+entrypoint_paper="https://papermc.io/api/v2"
+entrypoint_purpur="https://api.purpurmc.org/v2"
+
+case $PROJECT in
+
+  # TODO: vanilla
+  # TODO: various modloader (forge, fabric, etc...)
+  # TODO: craftbukkit
+  # TODO: spigot
+
+  # from papermc.io
+  paper | travertiane | waterfall | velocity)
+    [[ -z $entrypoint ]] &&
+      entrypoint=$entrypoint_paper
+
+    # getting project data
+    raw_project=$(curl -s "$entrypoint/projects/$project")
+  
+    [[ -z $version ]] &&
+      version=$(jq -r '.versions[-1]' <<< $raw_project)
+
+    # getting version data
+      raw_version=$(curl -s "$entrypoint/projects/$project/versions/$version")
+
+    [[ -z $build ]] &&
+      build=$(jq -r '.builds[-1]' <<< $raw_version)
+
+    # getting build data
+      raw_build=$(curl -s "$entrypoint/projects/$project/versions/$version/builds/$build")
+
+    jarname=$(jq -r '.downloads.application.name' <<< $raw_build)
+    jarsum=$(jq -r '.downloads.application.sha256' <<< $raw_build)
+    jarurl="$entrypoint/projects/$project/versions/$version/builds/$build/downloads/$jarname"    
+
+    unset raw_project
+    unset raw_version
+    unset raw_build
+    ;;
+
+  # from purpurmc.org
+  purpur)
+    [[ -z $entrypoint ]] && entrypoint=$entrypoint_purpur
+
+    # getting project data
+    raw_project=$(curl -s "$entrypoint/$project")
+
+    [[ -z $version ]] && \
+      version=$(jq -r '.versions[-1]' <<< $raw_project)
+
+    # getting version data
+      raw_version=$(curl -s "$entrypoint/$project/$version")
+
+    [[ -z $build ]] && \
+      build=$(jq -r '.builds.all[-1]' <<< $raw_version)
+
+    # getting build data
+      raw_build=$(curl -s "$entrypoint/$project/$version/$build")
+
+    jarname="${project}-${version}-${build}.jar"
+    jarsum=$(jq -r '.md5' <<< $raw_build)
+    jarurl="$entrypoint/$project/$version/$build/download"
+    sumbin="md5sum"
+
+    unset raw_project
+    unset raw_version
+    unset raw_build
+  ;;
+
+  *)
+  echo "'$PROJECT' is not supported project name"
+  exit 1
+  ;;
+
+esac
+
+jarpath="/tmp/$jarname"
+
+echo $jarname
+echo $jarurl
+echo $jarsum
+
+# if cached jar already exists, check checksum
+[[ ! -z $jarsum && -f $jarpath ]] &&
+  [[ $jarsum != $(sh -c "$sumbin $jarpath" | awk '{print $1}') ]] &&
+    echo "캐시된 jar 파일의 체크섬이 일치하지 않습니다!" && rm $jarpath
+
+# caching jar file
+if [[ ! -f $jarpath ]]; then
+  curl -o $jarpath $jarurl
+
+  if [[ ! -z $jarsum && $jarsum != $(sh -c "$sumbin $jarpath" | awk '{print $1}') ]]; then
+    echo "받아온 jar 파일의 체크섬이 일치하지 않습니다!"
+    exit 1
+  fi
+fi
+
+# clean up
+unset jarname
+unset jarsum
+unset jarurl
+
+java $JVM_ARGS -jar $jarpath $JAR_ARGS
+
